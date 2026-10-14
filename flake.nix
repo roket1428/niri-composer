@@ -1,5 +1,5 @@
 {
-  description = "A companion daemon to niri wayland compositor";
+  description = "A composer daemon for niri wayland compositor";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -23,7 +23,7 @@
         in
         {
           default = pkgs.rustPlatform.buildRustPackage {
-            pname = "niri-magician";
+            pname = "niri-composer";
             version = "0.1.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
