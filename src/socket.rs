@@ -1,5 +1,7 @@
 use std::env;
 
+use miette::Diagnostic;
+
 use bytes::BytesMut;
 use niri_ipc::{Event, Reply, Request, Response, socket::SOCKET_PATH_ENV};
 
@@ -13,8 +15,7 @@ const MAX_FRAME_LENGTH: usize = 512;
 
 type Result<T> = std::result::Result<T, SocketError>;
 
-// TODO: maybe ditch thiserror
-#[derive(Debug, thiserror::Error)]
+#[derive(Diagnostic, Debug, thiserror::Error)]
 pub enum SocketError {
     #[error("{path} is not set", path = niri_ipc::socket::SOCKET_PATH_ENV)]
     SocketPathNotSet,
@@ -51,14 +52,10 @@ impl EventSocket {
         };
         let mut stream = UnixStream::connect(path).await?;
 
-        let mut buf = serde_json::to_vec(&Request::EventStream)?;
-        buf.push(b'\n');
-
-        stream.write_all(&buf).await?;
+        stream.write_all(b"\"EventStream\"\n").await?;
         stream.shutdown().await?;
 
-        // "Handled"\n -> 10 bytes
-        let mut buf = [0u8; 10];
+        let mut buf = [0u8; 10]; // "Handled"\n -> 10 bytes
         stream.read_exact(&mut buf).await?;
 
         if &buf == b"\"Handled\"\n" {

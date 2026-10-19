@@ -44,6 +44,8 @@
               rustfmt
               clippy
               rust-analyzer
+              libinput
+              libxkbcommon
             ];
 
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";

@@ -2,7 +2,6 @@ use bytes::{Buf, BufMut, BytesMut};
 use memchr::memchr;
 use std::{cmp, io};
 
-// TODO: maybe ditch thiserror
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
     #[error("max line length exceeded")]

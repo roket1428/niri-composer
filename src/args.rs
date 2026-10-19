@@ -30,7 +30,8 @@ impl FromStr for Commands {
         match s {
             "daemon" => Ok(Self::Daemon),
             "validate" => Ok(Self::Validate),
-            other => Err(format!("unknown subcommand: '{}'", other).into()),
+            // TODO add dispatch subcommand
+            _ => Err("unknown subcommand".into()),
         }
     }
 }
@@ -58,10 +59,24 @@ impl Args {
                     exit(0);
                 }
                 Short('c') | Long("config") => {
-                    config = Some(parser.value()?.parse()?);
+                    let path = parser.value()?.into_string()?;
+                    if path.is_empty() {
+                        return Err("config path cannot be empty".into());
+                    }
+
+                    let path = PathBuf::from(path);
+                    if !path.is_file() {
+                        return Err("config path is not a file".into());
+                    }
+
+                    config = Some(path);
                 }
                 Value(maybe_command) => {
-                    command = Some(maybe_command.parse()?);
+                    if command.is_none() {
+                        command = Some(maybe_command.parse()?);
+                    } else {
+                        return Err(Error::UnexpectedArgument(maybe_command));
+                    }
                 }
                 _ => return Err(arg.unexpected()),
             }
