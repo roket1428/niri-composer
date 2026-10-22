@@ -1,6 +1,8 @@
-#![allow(unused)]
-
-use std::{fs, path::PathBuf, path::absolute};
+use std::{
+    fmt::Debug,
+    fs,
+    path::{PathBuf, absolute},
+};
 
 use directories::ProjectDirs;
 use knuffel::Decode;
@@ -9,7 +11,9 @@ use knuffel::errors::DecodeError;
 use knuffel::parse;
 use knuffel::traits::ErrorSpan;
 
-use miette::{Context, IntoDiagnostic, Result, bail};
+use crate::errors::{
+    BindingParseError, ConfigParseError, ConfigPrepareError, ConfigRetrivalError, PathParseError,
+};
 
 type NiriActions = Vec<niri_config::Action>;
 type Conditions = Vec<Condition>;
@@ -23,50 +27,75 @@ pub struct Config {
 impl Config {
     pub const FILE: &'static str = "config.kdl";
 
-    /// max binding name length
-    const MAX_NAME_LEN: usize = 32;
-
-    fn get_config_file() -> Result<PathBuf> {
+    fn get_config_file() -> Result<PathBuf, ConfigRetrivalError> {
         let mut path = match ProjectDirs::from("", "", env!("CARGO_PKG_NAME")) {
             Some(dirs) => dirs.config_dir().to_owned(),
             None => {
-                bail!("couldn't find the config directory because home is not set")
+                return Err(ConfigRetrivalError::HomeNotSet);
             }
         };
         path.push(Self::FILE);
         Ok(path)
     }
 
-    pub fn prepare(path: Option<PathBuf>) -> Result<(PathBuf, PathBuf)> {
+    pub fn prepare(path: Option<PathBuf>) -> Result<(PathBuf, PathBuf), ConfigPrepareError> {
         let path = match path {
-            Some(p) => absolute(p).into_diagnostic()?,
+            Some(p) => absolute(p)?,
             None => Self::get_config_file()?,
         };
 
         let dir = match path.parent() {
             Some(dir) => dir.to_owned(),
             None => {
-                bail!("couldn't retrieve the parent directory")
+                return Err(ConfigPrepareError::ParentNotFound);
             }
         };
 
         Ok((path, dir))
     }
 
-    pub fn validate(path: &PathBuf) -> Result<Self> {
-        let config = parse::<Self>(
-            Self::FILE,
-            fs::read_to_string(path)
-                .into_diagnostic()
-                .wrap_err("Config validation failed!")?
-                .as_str(),
-        )
-        .wrap_err("Config validation failed!")?;
-        println!("Config is valid");
-        Ok(config)
+    pub fn validate(path: &PathBuf) -> Result<Self, ConfigParseError> {
+        parse::<Self>(Self::FILE, fs::read_to_string(path)?.as_str())
+            .map_err(|e| ConfigParseError::from(e))
+    }
+
+    /// max binding name length
+    const MAX_NAME_LEN: usize = 32;
+
+    pub fn validate_binding(name: &str) -> Result<(), BindingParseError> {
+        if name.is_empty() {
+            return Err(BindingParseError::BindingEmpty);
+        }
+
+        if name.len() > Self::MAX_NAME_LEN {
+            return Err(BindingParseError::MaxLengthExceeded {
+                e: Self::MAX_NAME_LEN,
+                g: name.len(),
+            });
+        }
+
+        if !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err(BindingParseError::Invalid);
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_path(path: String) -> Result<PathBuf, PathParseError> {
+        if path.is_empty() {
+            return Err(PathParseError::PathEmpty);
+        }
+
+        let path = PathBuf::from(path);
+        if !path.is_file() {
+            return Err(PathParseError::NotAFile);
+        }
+
+        Ok(path)
     }
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct Dispatch {
     pub name: String,
@@ -81,15 +110,8 @@ impl<S: ErrorSpan> Decode<S> for Dispatch {
     ) -> Result<Self, DecodeError<S>> {
         let raw = RawDispatch::decode_node(node, ctx)?;
 
-        if raw.name.len() > Config::MAX_NAME_LEN {
-            return Err(DecodeError::unsupported(
-                node,
-                format!(
-                    "dispatch name can be at most {} bytes long (got {})",
-                    Config::MAX_NAME_LEN,
-                    raw.name.len()
-                ),
-            ));
+        if let Err(e) = Config::validate_binding(&raw.name) {
+            return Err(DecodeError::unsupported(node, e.to_string()));
         }
 
         let branches = raw.branches.len() >= 2;
@@ -99,25 +121,25 @@ impl<S: ErrorSpan> Decode<S> for Dispatch {
             (false, None, None) => {
                 return Err(DecodeError::unsupported(
                     node,
-                    "either n >= 2 branches or a single when+action pair must be defined",
+                    "Either n >= 2 branches or a single when+action pair must be defined",
                 ));
             }
             (false, None, _) => {
                 return Err(DecodeError::unsupported(
                     node,
-                    "child node `when` is required",
+                    "Child node `when` is required",
                 ));
             }
             (false, _, None) => {
                 return Err(DecodeError::unsupported(
                     node,
-                    "child node `action` is required",
+                    "Child node `action` is required",
                 ));
             }
             (true, _, _) => {
                 return Err(DecodeError::unsupported(
                     node,
-                    "branches and inline when+action nodes are mutually exclusive (you can't have both)",
+                    "Branches and inline when+action nodes are mutually exclusive (you can't have both)",
                 ));
             }
         };
@@ -148,6 +170,7 @@ struct RawDispatch {
     fallback: Option<NiriActions>,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 enum Expression {
     Branches(Vec<Branch>),
@@ -157,6 +180,7 @@ enum Expression {
     },
 }
 
+#[allow(unused)]
 #[derive(Decode, Debug, Clone)]
 struct Branch {
     #[knuffel(child, unwrap(children))]
@@ -166,6 +190,7 @@ struct Branch {
     action: NiriActions,
 }
 
+#[allow(unused)]
 #[derive(Decode, Debug, Clone)]
 enum Condition {
     All(#[knuffel(children)] Vec<NestedCondition>),
@@ -176,6 +201,7 @@ enum Condition {
     ConfigFailed(#[knuffel(argument, default = true)] bool),
 }
 
+#[allow(unused)]
 #[derive(Decode, Debug, Clone)]
 enum NestedCondition {
     Overview(#[knuffel(argument, default = true)] bool),

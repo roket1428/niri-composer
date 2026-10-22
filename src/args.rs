@@ -1,16 +1,21 @@
-use std::{path::PathBuf, process::exit, str::FromStr};
+use std::{path::PathBuf, process::exit};
 
-use lexopt::{Error, Parser};
+use lexopt::Arg::{Long, Short, Value};
+use lexopt::Parser;
+
+use crate::config::Config;
+use crate::errors::ArgError;
 
 #[rustfmt::skip]
-const HELP: &str =
+const HELP: &'static str =
 r#"A composer daemon for niri wayland compositor
 
 Usage: niri-composer <COMMAND> [OPTIONS]
 
 Commands:
-  daemon    Start the daemon
-  validate  Validate the config
+  daemon             Start the daemon
+  validate           Validate the config
+  dispatch <NAME>    Trigger the target dispatch
 
 Options:
   -c, --config <PATH>    Path to config file
@@ -21,19 +26,7 @@ Options:
 pub enum Commands {
     Daemon,
     Validate,
-}
-
-impl FromStr for Commands {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Error> {
-        match s {
-            "daemon" => Ok(Self::Daemon),
-            "validate" => Ok(Self::Validate),
-            // TODO add dispatch subcommand
-            _ => Err("unknown subcommand".into()),
-        }
-    }
+    Dispatch(String),
 }
 
 pub struct Args {
@@ -42,9 +35,7 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn parse() -> Result<Self, Error> {
-        use lexopt::prelude::*;
-
+    pub fn parse() -> Result<Self, ArgError> {
         let mut command: Option<Commands> = None;
         let mut config: Option<PathBuf> = None;
         let mut parser = Parser::from_env();
@@ -59,27 +50,72 @@ impl Args {
                     exit(0);
                 }
                 Short('c') | Long("config") => {
-                    let path = parser.value()?.into_string()?;
-                    if path.is_empty() {
-                        return Err("config path cannot be empty".into());
-                    }
+                    let path = match parser.value()?.into_string() {
+                        Ok(path) => path,
+                        Err(arg) => {
+                            return Err(ArgError::NotUnicode { arg });
+                        }
+                    };
 
-                    let path = PathBuf::from(path);
-                    if !path.is_file() {
-                        return Err("config path is not a file".into());
-                    }
-
-                    config = Some(path);
+                    match Config::validate_path(path) {
+                        Ok(path) => {
+                            config = Some(path);
+                        }
+                        Err(error) => {
+                            return Err(ArgError::from(error));
+                        }
+                    };
                 }
                 Value(maybe_command) => {
                     if command.is_none() {
-                        command = Some(maybe_command.parse()?);
+                        let maybe_command = match maybe_command.into_string() {
+                            Ok(maybe_command) => maybe_command,
+                            Err(arg) => {
+                                return Err(ArgError::NotUnicode { arg });
+                            }
+                        };
+
+                        match maybe_command.as_str() {
+                            "validate" => {
+                                command = Some(Commands::Validate);
+                            }
+                            "daemon" => {
+                                command = Some(Commands::Daemon);
+                            }
+                            "dispatch" => {
+                                let binding = match parser.value()?.into_string() {
+                                    Ok(binding) => binding,
+                                    Err(arg) => {
+                                        return Err(ArgError::NotUnicode { arg });
+                                    }
+                                };
+
+                                match Config::validate_binding(&binding) {
+                                    Ok(()) => {
+                                        command = Some(Commands::Dispatch(binding));
+                                    }
+                                    Err(error) => {
+                                        return Err(ArgError::from(error));
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(ArgError::UnknownSubcommand { maybe_command });
+                            }
+                        }
                     } else {
-                        return Err(Error::UnexpectedArgument(maybe_command));
+                        return Err(ArgError::UnexpectedSubcommand { maybe_command });
                     }
                 }
-                _ => return Err(arg.unexpected()),
+                _ => {
+                    return Err(ArgError::LexoptError(arg.unexpected()));
+                }
             }
+        }
+
+        if command.is_none() {
+            print!("{}", HELP);
+            exit(0);
         }
 
         Ok(Args { command, config })

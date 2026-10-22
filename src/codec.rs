@@ -1,21 +1,12 @@
 use bytes::{Buf, BufMut, BytesMut};
 use memchr::memchr;
-use std::{cmp, io};
+use std::cmp;
 
-#[derive(Debug, thiserror::Error)]
-pub enum CodecError {
-    #[error("max line length exceeded")]
-    MaxLineLengthExceeded,
-
-    #[error(transparent)]
-    ParseError(#[from] serde_json::Error),
-
-    #[error(transparent)]
-    Io(#[from] io::Error),
-}
+use crate::errors::CodecError;
 
 type Result<T> = std::result::Result<T, CodecError>;
 
+#[derive(Debug)]
 pub struct Codec {
     next_index: usize,
     max_length: usize,
@@ -70,7 +61,7 @@ impl Codec {
                     // newline, return an error and start discarding on the
                     // next call.
                     self.is_discarding = true;
-                    return Err(CodecError::MaxLineLengthExceeded);
+                    return Err(CodecError::MaxFrameLengthExceeded);
                 }
                 (false, None) => {
                     // We didn't find a line or reach the length limit, so the next
